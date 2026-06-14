@@ -498,16 +498,15 @@ class FullHydrogenSimulation:
         self.screen.blit(self.noise_surf, (0, 0))
 
     def effect_tunnel(self):
-        sf     = 0.98
-        new_w  = int(self.width  * sf)
-        new_h  = int(self.height * sf)
         # Use tunnel_frame instead of self.screen — reading the display surface
         # directly is unreliable on macOS due to double-buffer swapping.
-        # rotozoom applies rotation + scale in one pass — smoother than separate calls.
-        shrunk       = pygame.transform.rotozoom(self.tunnel_frame, 1.0, 0.97)
-        new_w, new_h = shrunk.get_size()
-        xp = (self.width  - new_w) // 2
-        yp = (self.height - new_h) // 2
+        # smoothscale never creates black corner artifacts (unlike rotate/rotozoom).
+        sf     = 0.97
+        new_w  = int(self.width  * sf)
+        new_h  = int(self.height * sf)
+        shrunk = pygame.transform.smoothscale(self.tunnel_frame, (new_w, new_h))
+        xp     = (self.width  - new_w) // 2
+        yp     = (self.height - new_h) // 2
         self.tunnel_temp.blit(self.bg_surface, (0, 0))
         self.tunnel_temp.blit(shrunk, (xp, yp))
         self.screen.blit(self.tunnel_temp, (0, 0))
