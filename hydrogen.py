@@ -197,6 +197,15 @@ class FullHydrogenSimulation:
         self.tunnel_temp        = pygame.Surface((self.width, self.height))
         self.tunnel_frame       = pygame.Surface((self.width, self.height))
         self.invert_surf        = pygame.Surface((self.width, self.height))
+
+        # Pre-computed tunnel vignette — dark at edges, transparent at centre
+        self.tunnel_vignette = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        _cx, _cy = self.width // 2, self.height // 2
+        _max_r   = int(math.sqrt(_cx ** 2 + _cy ** 2))
+        for _i in range(50, 0, -1):
+            _r     = int(_max_r * _i / 50)
+            _alpha = int(180 * (_i / 50) ** 2)
+            pygame.draw.circle(self.tunnel_vignette, (0, 0, 0, _alpha), (_cx, _cy), _r)
         self.prev_phase         = None
 
         # Pre-computed RGB channels for chromatic aberration
@@ -494,17 +503,16 @@ class FullHydrogenSimulation:
         new_h  = int(self.height * sf)
         # Use tunnel_frame instead of self.screen — reading the display surface
         # directly is unreliable on macOS due to double-buffer swapping.
-        shrunk = pygame.transform.smoothscale(self.tunnel_frame, (new_w, new_h))
-        if self.frame_count % 3 == 0:
-            shrunk = pygame.transform.rotate(shrunk, random.choice([-2, -1, 1, 2]))
-            new_w, new_h = shrunk.get_size()
+        # rotozoom applies rotation + scale in one pass — smoother than separate calls.
+        shrunk       = pygame.transform.rotozoom(self.tunnel_frame, 1.0, 0.97)
+        new_w, new_h = shrunk.get_size()
         xp = (self.width  - new_w) // 2
         yp = (self.height - new_h) // 2
         self.tunnel_temp.blit(self.bg_surface, (0, 0))
         self.tunnel_temp.blit(shrunk, (xp, yp))
         self.screen.blit(self.tunnel_temp, (0, 0))
+        self.screen.blit(self.tunnel_vignette, (0, 0))    # depth darkening at edges
         self.tunnel_frame.blit(self.tunnel_temp, (0, 0))  # save for next frame
-        self._add_calm_flash_overlay(0.25)
 
     def effect_chaos(self):
         """Max mayhem: shake + glitches + inversion + popups + red alarm strobe."""
