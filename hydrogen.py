@@ -195,7 +195,9 @@ class FullHydrogenSimulation:
         self.flash_overlay_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.noise_surf         = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.tunnel_temp        = pygame.Surface((self.width, self.height))
+        self.tunnel_frame       = pygame.Surface((self.width, self.height))
         self.invert_surf        = pygame.Surface((self.width, self.height))
+        self.prev_phase         = None
 
         GLOW_SIZE = 80
         self.glow_surfs = [
@@ -497,7 +499,9 @@ class FullHydrogenSimulation:
         sf     = 0.98
         new_w  = int(self.width  * sf)
         new_h  = int(self.height * sf)
-        shrunk = pygame.transform.smoothscale(self.screen, (new_w, new_h))
+        # Use tunnel_frame instead of self.screen — reading the display surface
+        # directly is unreliable on macOS due to double-buffer swapping.
+        shrunk = pygame.transform.smoothscale(self.tunnel_frame, (new_w, new_h))
         if self.frame_count % 3 == 0:
             shrunk = pygame.transform.rotate(shrunk, random.choice([-2, -1, 1, 2]))
             new_w, new_h = shrunk.get_size()
@@ -506,6 +510,7 @@ class FullHydrogenSimulation:
         self.tunnel_temp.blit(self.bg_surface, (0, 0))
         self.tunnel_temp.blit(shrunk, (xp, yp))
         self.screen.blit(self.tunnel_temp, (0, 0))
+        self.tunnel_frame.blit(self.tunnel_temp, (0, 0))  # save for next frame
         self._add_calm_flash_overlay(0.25)
 
     def effect_chaos(self):
@@ -748,6 +753,11 @@ class FullHydrogenSimulation:
                 phase_num             = elapsed // PHASE_DURATION
                 self.elapsed_in_phase = elapsed - phase_num * PHASE_DURATION
                 phase                 = self.get_current_phase(elapsed)
+
+                # Seed tunnel_frame from work_surface on the first frame of the tunnel phase
+                if phase == "tunnel" and self.prev_phase != "tunnel":
+                    self.tunnel_frame.blit(self.work_surface, (0, 0))
+                self.prev_phase = phase
 
                 if   phase == "scroll":     self.effect_scroll()
                 elif phase == "melt":       self.effect_melt()
