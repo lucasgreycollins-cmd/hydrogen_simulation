@@ -173,7 +173,7 @@ class FullHydrogenSimulation:
         # ── Phases ─────────────────────────────────────────────────────────────
         self.phases = [
             "scroll", "melt", "matrix", "chromatic",
-            "wave", "terminal", "static", "tunnel", "chaos", "bsod", "calm_flash",
+            "wave", "terminal", "static", "tunnel", "chaos", "bsod",
         ]
 
         # ── Flash cycle — incremented ONCE per frame in run() ──────────────────
@@ -198,13 +198,6 @@ class FullHydrogenSimulation:
         self.tunnel_frame       = pygame.Surface((self.width, self.height))
         self.invert_surf        = pygame.Surface((self.width, self.height))
         self.prev_phase         = None
-
-        GLOW_SIZE = 80
-        self.glow_surfs = [
-            pygame.Surface((GLOW_SIZE * 2, GLOW_SIZE * 2), pygame.SRCALPHA)
-            for _ in range(5)
-        ]
-        self.glow_size = GLOW_SIZE
 
         # Pre-computed RGB channels for chromatic aberration
         self.ch_r = self.bg_surface.copy()
@@ -581,28 +574,6 @@ class FullHydrogenSimulation:
             self.screen.blit(self.font_bsod_small.render(line, True, (255, 255, 255)), (80, y_tech))
             y_tech += 26
 
-    def effect_calm_flash(self):
-        """Gentle pulsing orbs — safe 2 Hz, no random size jitter."""
-        self.screen.blit(self.bg_surface, (0, 0))
-        alpha_base = int(80 + 70 * math.sin(self.flash_cycle * math.pi / 15))
-        ls         = self.glow_size
-        positions  = [
-            (self.width * 0.2, self.height * 0.2),
-            (self.width * 0.8, self.height * 0.2),
-            (self.width * 0.5, self.height * 0.5),
-            (self.width * 0.2, self.height * 0.8),
-            (self.width * 0.8, self.height * 0.8),
-        ]
-        for i, (px, py) in enumerate(positions):
-            color_idx = (i + self.frame_count // 15) % len(self.soft_colors)
-            sc        = self.soft_colors[color_idx]
-            glow      = self.glow_surfs[i]
-            glow.fill((0, 0, 0, 0))
-            for r in range(ls, 0, -4):
-                a = int(alpha_base * (ls - r) / ls)
-                pygame.draw.circle(glow, (*sc[:3], a), (ls, ls), r)
-            self.screen.blit(glow, (int(px - ls), int(py - ls)))
-
     # ── Overlay helpers ────────────────────────────────────────────────────────
     def _add_calm_flash_overlay(self, intensity=0.5):
         base  = int(100 * intensity)
@@ -769,7 +740,6 @@ class FullHydrogenSimulation:
                 elif phase == "tunnel":     self.effect_tunnel()
                 elif phase == "chaos":      self.effect_chaos()
                 elif phase == "bsod":       self.effect_bsod()
-                elif phase == "calm_flash": self.effect_calm_flash()
 
                 # Scary message flashes during tense phases
                 if phase in self.scary_msg_phases:
@@ -782,7 +752,7 @@ class FullHydrogenSimulation:
                     self._draw_countdown(elapsed)
 
                 if (self.frame_count % SURFACE_UPDATE_INTERVAL == 0
-                        and phase not in {"tunnel", "calm_flash", "terminal", "chromatic", "matrix", "bsod"}):
+                        and phase not in {"tunnel", "terminal", "chromatic", "matrix", "bsod"}):
                     self.work_surface.blit(self.screen, (0, 0))
 
             pygame.display.flip()
