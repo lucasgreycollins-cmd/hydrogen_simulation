@@ -195,7 +195,7 @@ class FullHydrogenSimulation:
         self.flash_overlay_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.noise_surf         = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.tunnel_temp        = pygame.Surface((self.width, self.height))
-        self.tunnel_frame       = pygame.Surface((self.width, self.height))
+        self.tunnel_frame       = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.invert_surf        = pygame.Surface((self.width, self.height))
 
         # Pre-computed tunnel vignette — dark at edges, transparent at centre
@@ -498,15 +498,13 @@ class FullHydrogenSimulation:
         self.screen.blit(self.noise_surf, (0, 0))
 
     def effect_tunnel(self):
-        # Use tunnel_frame instead of self.screen — reading the display surface
-        # directly is unreliable on macOS due to double-buffer swapping.
-        # smoothscale never creates black corner artifacts (unlike rotate/rotozoom).
-        sf     = 0.97
-        new_w  = int(self.width  * sf)
-        new_h  = int(self.height * sf)
-        shrunk = pygame.transform.smoothscale(self.tunnel_frame, (new_w, new_h))
-        xp     = (self.width  - new_w) // 2
-        yp     = (self.height - new_h) // 2
+        # tunnel_frame is SRCALPHA so rotozoom produces transparent corners
+        # (not black) — transparent corners reveal bg_surface underneath
+        # instead of accumulating into a black screen.
+        shrunk       = pygame.transform.rotozoom(self.tunnel_frame, 1.0, 0.97)
+        new_w, new_h = shrunk.get_size()
+        xp           = (self.width  - new_w) // 2
+        yp           = (self.height - new_h) // 2
         self.tunnel_temp.blit(self.bg_surface, (0, 0))
         self.tunnel_temp.blit(shrunk, (xp, yp))
         self.screen.blit(self.tunnel_temp, (0, 0))
