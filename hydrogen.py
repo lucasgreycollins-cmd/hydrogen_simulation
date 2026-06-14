@@ -7,13 +7,13 @@ from PIL import ImageGrab
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 FPS                     = 60
-PHASE_DURATION          = 7000   # ms per visual phase
-DOUBLE_CLICK_TIME       = 500    # ms window for double-click
-SURFACE_UPDATE_INTERVAL = 120    # frames between work_surface snapshots
+PHASE_DURATION          = 7000
+DOUBLE_CLICK_TIME       = 500
+SURFACE_UPDATE_INTERVAL = 120
 MELT_STRIPS             = 15
 CHAOS_THRESHOLD         = 0.60
-SHAKE_MAX               = 10     # max pixel offset during chaos shake
-BOOT_CHARS_PER_FRAME    = 2      # characters typed per frame in boot screen
+SHAKE_MAX               = 10
+BOOT_CHARS_PER_FRAME    = 2
 
 # ── Palette ────────────────────────────────────────────────────────────────────
 COLORS = {
@@ -82,6 +82,19 @@ POPUPS = [
      "   OK   "),
 ]
 
+SCARY_MESSAGES = [
+    "ALL YOUR FILES HAVE BEEN ENCRYPTED",
+    "I CAN SEE YOU",
+    "YOU CANNOT STOP THIS",
+    "HYDROGEN HAS TAKEN CONTROL",
+    "YOUR DATA IS BEING UPLOADED",
+    "DO NOT TURN OFF YOUR COMPUTER",
+    "SYSTEM COMPROMISED",
+    "THERE IS NO ESCAPE",
+]
+
+MATRIX_CHARS = list("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*")
+
 
 class FullHydrogenSimulation:
     def __init__(self):
@@ -121,28 +134,41 @@ class FullHydrogenSimulation:
         self.font_mono_sm     = pygame.font.SysFont("courier", 13)
         self.font_popup       = pygame.font.SysFont("arial", 13)
         self.font_popup_title = pygame.font.SysFont("arial", 13, bold=True)
+        self.font_bsod_face   = pygame.font.SysFont("arial", 72)
+        self.font_bsod_main   = pygame.font.SysFont("arial", 22)
+        self.font_bsod_small  = pygame.font.SysFont("arial", 17)
+        self.font_scary       = pygame.font.SysFont("arial", 46, bold=True)
+        self.font_hud         = pygame.font.SysFont("courier", 16, bold=True)
 
         # ── Timing ─────────────────────────────────────────────────────────────
-        self.clock       = pygame.time.Clock()
-        self.running     = True
-        self.frame_count = 0
-        self.start_ticks = 0
+        self.clock            = pygame.time.Clock()
+        self.running          = True
+        self.frame_count      = 0
+        self.start_ticks      = 0
+        self.elapsed_in_phase = 0
 
         # ── State machine: boot → desktop → payload ────────────────────────────
         self.state           = "boot"
         self.last_click_time = 0
 
-        # ── Desktop icon ───────────────────────────────────────────────────────
-        self.icon_rect = pygame.Rect(40, 40, 70, 70)
+        # ── Desktop icon (animated atom) ───────────────────────────────────────
+        self.icon_rect  = pygame.Rect(40, 40, 70, 70)
+        self.icon_angle = 0.0
+        orbit_a, orbit_b = 22, 8
+        orbit_base = pygame.Surface((orbit_a * 2 + 4, orbit_b * 2 + 4), pygame.SRCALPHA)
+        pygame.draw.ellipse(orbit_base, (0, 150, 255, 180), (2, 2, orbit_a * 2, orbit_b * 2), 1)
+        self.icon_orbits  = [pygame.transform.rotate(orbit_base, deg) for deg in [0, 60, 120]]
+        self.icon_orbit_a = orbit_a
+        self.icon_orbit_b = orbit_b
 
-        # ── Scroll offsets (shared by scroll and chaos) ────────────────────────
+        # ── Scroll offsets ─────────────────────────────────────────────────────
         self.scroll_x = 0
         self.scroll_y = 0
 
         # ── Phases ─────────────────────────────────────────────────────────────
         self.phases = [
-            "scroll", "melt", "chromatic", "wave",
-            "terminal", "static", "tunnel", "chaos", "calm_flash",
+            "scroll", "melt", "matrix", "chromatic",
+            "wave", "terminal", "static", "tunnel", "chaos", "bsod", "calm_flash",
         ]
 
         # ── Flash cycle — incremented ONCE per frame in run() ──────────────────
@@ -160,12 +186,12 @@ class FullHydrogenSimulation:
             (255,   0, 150, 180),
         ]
 
-        # ── Pre-allocated surfaces (avoid per-frame alloc) ─────────────────────
+        # ── Pre-allocated surfaces ─────────────────────────────────────────────
         self.flash_overlay_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.noise_surf         = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.tunnel_temp        = pygame.Surface((self.width, self.height))
+        self.invert_surf        = pygame.Surface((self.width, self.height))
 
-        # Pre-allocate glow surfaces for calm_flash (fixed size, no jitter)
         GLOW_SIZE = 80
         self.glow_surfs = [
             pygame.Surface((GLOW_SIZE * 2, GLOW_SIZE * 2), pygame.SRCALPHA)
@@ -173,21 +199,48 @@ class FullHydrogenSimulation:
         ]
         self.glow_size = GLOW_SIZE
 
-        # Pre-computed RGB channel surfaces for chromatic aberration
+        # Pre-computed RGB channels for chromatic aberration
         self.ch_r = self.bg_surface.copy()
-        self.ch_r.fill((0, 255, 255), special_flags=pygame.BLEND_RGB_SUB)  # keep only R
-
+        self.ch_r.fill((0, 255, 255), special_flags=pygame.BLEND_RGB_SUB)
         self.ch_g = self.bg_surface.copy()
-        self.ch_g.fill((255, 0, 255), special_flags=pygame.BLEND_RGB_SUB)  # keep only G
-
+        self.ch_g.fill((255, 0, 255), special_flags=pygame.BLEND_RGB_SUB)
         self.ch_b = self.bg_surface.copy()
-        self.ch_b.fill((255, 255, 0), special_flags=pygame.BLEND_RGB_SUB)  # keep only B
+        self.ch_b.fill((255, 255, 0), special_flags=pygame.BLEND_RGB_SUB)
 
         # ── Boot sequence state ────────────────────────────────────────────────
         self.boot_line_idx   = 0
         self.boot_char_idx   = 0
         self.boot_complete   = False
         self.boot_done_frame = None
+
+        # ── Matrix rain ────────────────────────────────────────────────────────
+        font_matrix    = pygame.font.SysFont("courier", 14)
+        matrix_palette = [
+            (220, 255, 220),  # 0: head (near-white green)
+            (0, 230, 60),     # 1: bright trail
+            (0, 180, 45),     # 2
+            (0, 130, 30),     # 3
+            (0, 80, 15),      # 4
+            (0, 40, 8),       # 5: dim tail
+        ]
+        self.matrix_palette_len = len(matrix_palette)
+        self.matrix_pre = {
+            (ch, ci): font_matrix.render(ch, True, color)
+            for ch in MATRIX_CHARS
+            for ci, color in enumerate(matrix_palette)
+        }
+        self.matrix_col_w    = 14
+        self.matrix_char_h   = 16
+        self.matrix_num_cols = self.width  // self.matrix_col_w
+        self.matrix_num_rows = self.height // self.matrix_char_h + 2
+        max_trail = self.matrix_palette_len - 1
+        self.matrix_heads      = [-random.randint(0, 30) for _ in range(self.matrix_num_cols)]
+        self.matrix_speeds     = [random.randint(1, 3)   for _ in range(self.matrix_num_cols)]
+        self.matrix_trail_lens = [random.randint(4, max_trail) for _ in range(self.matrix_num_cols)]
+        self.matrix_grid = [
+            [random.choice(MATRIX_CHARS) for _ in range(self.matrix_num_rows)]
+            for _ in range(self.matrix_num_cols)
+        ]
 
         # ── Terminal phase state ───────────────────────────────────────────────
         self.term_lines        = []
@@ -197,34 +250,80 @@ class FullHydrogenSimulation:
         self.term_delay        = 0
 
         # ── Popup state ────────────────────────────────────────────────────────
-        self.active_popups = []  # [popup_idx, x, y, created_frame]
-        self.popup_cd      = 0   # countdown until next popup spawn
+        self.active_popups = []
+        self.popup_cd      = 0
+
+        # ── Scary message overlay ──────────────────────────────────────────────
+        self.scary_msg          = None
+        self.scary_msg_frame    = 0
+        self.scary_msg_duration = 55
+        self.scary_msg_cd       = 0
+        self.scary_msg_phases   = {"wave", "tunnel", "chaos", "static"}
+
+        # ── HUD: countdown timer ───────────────────────────────────────────────
+        self.countdown_ms = 5 * 60 * 1000  # 5-minute fake countdown
 
     # ── Phase resolution ───────────────────────────────────────────────────────
     def get_current_phase(self, current_time):
         idx = (current_time // PHASE_DURATION) % len(self.phases)
         return self.phases[idx]
 
-    # ── Desktop icon ───────────────────────────────────────────────────────────
+    # ── Desktop icon (animated hydrogen atom) ──────────────────────────────────
     def draw_desktop_icon(self):
         self.screen.blit(self.bg_surface, (0, 0))
-        pygame.draw.rect(self.screen, COLORS['bg'],     self.icon_rect, border_radius=8)
-        pygame.draw.rect(self.screen, COLORS['border'], self.icon_rect, 3, border_radius=8)
-        cx, cy = self.icon_rect.centerx, self.icon_rect.centery
-        pygame.draw.circle(self.screen, COLORS['accent'], (cx, cy - 5), 10)
-        pygame.draw.circle(self.screen, COLORS['border'], (cx + 12, cy + 8), 5)
-        pygame.draw.line(self.screen, COLORS['grid'], (cx, cy - 5), (cx + 12, cy + 8), 2)
+        self.icon_angle = (self.icon_angle + 1.5) % 360
+
+        r  = self.icon_rect
+        cx = r.centerx
+        cy = r.centery - 2  # shift up to leave room for label
+
+        # Drop shadow
+        shadow = pygame.Surface((r.width + 8, r.height + 8), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 45), shadow.get_rect(), border_radius=14)
+        self.screen.blit(shadow, (r.x - 4 + 3, r.y - 4 + 3))
+
+        # Background: dark navy rounded square
+        pygame.draw.rect(self.screen, (12, 18, 50), r, border_radius=12)
+        # Top highlight for depth
+        hi = pygame.Rect(r.x + 3, r.y + 3, r.width - 6, r.height // 2 - 2)
+        pygame.draw.rect(self.screen, (22, 38, 90), hi, border_radius=9)
+        # Electric blue border
+        pygame.draw.rect(self.screen, (0, 130, 255), r, 2, border_radius=12)
+
+        # Three tilted electron orbits (pre-computed)
+        for orbit_surf in self.icon_orbits:
+            ow, oh = orbit_surf.get_size()
+            self.screen.blit(orbit_surf, (cx - ow // 2, cy - oh // 2))
+
+        # Animated electrons — 120° apart, orbiting at different tilts
+        a, b = self.icon_orbit_a, self.icon_orbit_b
+        t    = math.radians(self.icon_angle)
+        for i, rot_deg in enumerate([0, 60, 120]):
+            rot   = math.radians(rot_deg)
+            theta = t + i * (2 * math.pi / 3)
+            ex    = a * math.cos(theta)
+            ey    = b * math.sin(theta)
+            rx    = int(cx + ex * math.cos(rot) - ey * math.sin(rot))
+            ry    = int(cy + ex * math.sin(rot) + ey * math.cos(rot))
+            pygame.draw.circle(self.screen, (0, 200, 255),     (rx, ry), 4)
+            pygame.draw.circle(self.screen, (200, 240, 255),   (rx, ry), 2)
+
+        # Pulsing nucleus
+        nr = 4 + int(1.5 * math.sin(self.frame_count * 0.12))
+        pygame.draw.circle(self.screen, (255, 120, 40),  (cx, cy), nr + 1)
+        pygame.draw.circle(self.screen, (255, 220, 160), (cx, cy), nr - 1)
+
+        # Label
         text_surf = self.font_ui.render("hydrogen", True, COLORS['text'])
         text_bg   = pygame.Surface((text_surf.get_width() + 10, text_surf.get_height() + 4), pygame.SRCALPHA)
         text_bg.fill(COLORS['text_shadow'])
         bg_x = cx - text_bg.get_width() // 2
-        bg_y = self.icon_rect.bottom + 8
+        bg_y = r.bottom + 8
         self.screen.blit(text_bg,   (bg_x, bg_y))
         self.screen.blit(text_surf, (bg_x + 5, bg_y + 2))
 
-    # ── Boot screen ────────────────────────────────────────────────────────────
+    # ── Boot screen ─────────────────────────────────────────────────────────────
     def draw_boot_screen(self):
-        """Green-on-black fake terminal that types the boot script before the icon appears."""
         self.screen.fill((0, 0, 0))
 
         if not self.boot_complete:
@@ -232,16 +331,15 @@ class FullHydrogenSimulation:
             line = BOOT_SCRIPT[self.boot_line_idx]
             if self.boot_char_idx >= len(line):
                 self.boot_char_idx = len(line)
-                if self.frame_count % 8 == 0:  # brief pause between lines
+                if self.frame_count % 8 == 0:
                     self.boot_line_idx += 1
                     self.boot_char_idx  = 0
                     if self.boot_line_idx >= len(BOOT_SCRIPT):
                         self.boot_complete   = True
                         self.boot_done_frame = self.frame_count
 
-        x   = 60
-        y0  = 80
-        lh  = self.font_mono.get_height() + 4
+        x, y0 = 60, 80
+        lh = self.font_mono.get_height() + 4
 
         for i in range(min(self.boot_line_idx, len(BOOT_SCRIPT))):
             surf = self.font_mono.render(BOOT_SCRIPT[i], True, COLORS['term_dim'])
@@ -256,7 +354,7 @@ class FullHydrogenSimulation:
         if self.boot_complete and self.boot_done_frame and (self.frame_count - self.boot_done_frame) > 90:
             self.state = "desktop"
 
-    # ── Visual effects ─────────────────────────────────────────────────────────
+    # ── Visual effects ──────────────────────────────────────────────────────────
     def effect_scroll(self):
         self.scroll_x = (self.scroll_x + 4) % self.width
         self.scroll_y = (self.scroll_y + 2) % self.height
@@ -279,8 +377,40 @@ class FullHydrogenSimulation:
                 self.screen.blit(slab, (sx, dy))
         self._add_calm_flash_overlay(0.35)
 
+    def effect_matrix(self):
+        """Falling green character rain."""
+        self.screen.fill((0, 0, 0))
+        cw     = self.matrix_col_w
+        ch     = self.matrix_char_h
+        max_ci = self.matrix_palette_len - 1
+
+        for col in range(self.matrix_num_cols):
+            speed = self.matrix_speeds[col]
+            step  = max(1, 4 - speed)
+            if self.frame_count % step == col % step:
+                self.matrix_heads[col] += 1
+                head_row = self.matrix_heads[col]
+                if head_row >= 0:
+                    self.matrix_grid[col][head_row % self.matrix_num_rows] = random.choice(MATRIX_CHARS)
+            else:
+                head_row = self.matrix_heads[col]
+
+            trail_len = self.matrix_trail_lens[col]
+            for depth in range(trail_len + 1):
+                row = head_row - depth
+                if 0 <= row < self.matrix_num_rows:
+                    char = self.matrix_grid[col][row % self.matrix_num_rows]
+                    surf = self.matrix_pre.get((char, min(depth, max_ci)))
+                    if surf:
+                        self.screen.blit(surf, (col * cw, row * ch))
+
+            if self.matrix_heads[col] > self.matrix_num_rows + trail_len:
+                self.matrix_heads[col]      = -random.randint(5, 25)
+                self.matrix_speeds[col]     = random.randint(1, 3)
+                self.matrix_trail_lens[col] = random.randint(4, max_ci)
+
     def effect_chromatic(self):
-        """Split the R, G, B channels apart for a classic glitch look."""
+        """RGB channel split — pre-computed channels, animated offset."""
         offset = int(6 * math.sin(self.frame_count * 0.08)) + random.randint(-2, 2)
         self.screen.fill((0, 0, 0))
         self.screen.blit(self.ch_r, (-offset * 2, random.randint(-1, 1)), special_flags=pygame.BLEND_RGB_ADD)
@@ -302,7 +432,6 @@ class FullHydrogenSimulation:
         """Full-screen fake hacking terminal with scrolling commands."""
         self.screen.fill(COLORS['term_bg'])
 
-        # Advance typing
         if self.term_delay > 0:
             self.term_delay -= 1
         else:
@@ -319,34 +448,27 @@ class FullHydrogenSimulation:
                 self.term_char_pos     = 0
                 self.term_delay        = random.randint(4, 18)
 
-        # Header bar
         pygame.draw.rect(self.screen, COLORS['term_bright'], (0, 0, self.width, 26))
-        header = self.font_mono_sm.render(
-            "  HYDROGEN TERMINAL v2.4.1 — LIVE SESSION", True, COLORS['term_bg']
+        self.screen.blit(
+            self.font_mono_sm.render("  HYDROGEN TERMINAL v2.4.1 — LIVE SESSION", True, COLORS['term_bg']),
+            (0, 5)
         )
-        self.screen.blit(header, (0, 5))
 
-        # Completed lines
         lh    = self.font_mono_sm.get_height() + 3
         max_v = (self.height - 70) // lh
-        vis   = self.term_lines[-max_v:]
         y     = 36
-        for line in vis:
-            surf = self.font_mono_sm.render(line, True, COLORS['term_dim'])
-            self.screen.blit(surf, (20, y))
+        for line in self.term_lines[-max_v:]:
+            self.screen.blit(self.font_mono_sm.render(line, True, COLORS['term_dim']), (20, y))
             y += lh
 
-        # Currently-typing line
         if self.term_current_line:
             partial = self.term_current_line[:self.term_char_pos]
             cursor  = "_" if (self.frame_count // 15) % 2 == 0 else " "
-            surf    = self.font_mono_sm.render("$ " + partial + cursor, True, COLORS['term_bright'])
-            self.screen.blit(surf, (20, y))
+            self.screen.blit(self.font_mono_sm.render("$ " + partial + cursor, True, COLORS['term_bright']), (20, y))
 
     def effect_static(self):
         """Corrupted TV signal — scanline displacement plus white noise."""
         self.screen.blit(self.bg_surface, (0, 0))
-
         for _ in range(random.randint(30, 70)):
             gy = random.randint(0, self.height - 5)
             gh = min(random.randint(1, 4), self.height - gy)
@@ -356,16 +478,14 @@ class FullHydrogenSimulation:
             gw = self.width - abs(dx)
             if gw > 0 and gh > 0:
                 self.screen.blit(self.bg_surface, (gx, gy), (sx, gy, gw, gh))
-
         self.noise_surf.fill((0, 0, 0, 0))
         for _ in range(150):
             nx    = random.randint(0, self.width  - 1)
             ny    = random.randint(0, self.height - 1)
-            nw    = random.randint(3, 20)
-            nh    = random.randint(1, 3)
             gray  = random.randint(160, 255)
             alpha = random.randint(80, 180)
-            pygame.draw.rect(self.noise_surf, (gray, gray, gray, alpha), (nx, ny, nw, nh))
+            pygame.draw.rect(self.noise_surf, (gray, gray, gray, alpha),
+                             (nx, ny, random.randint(3, 20), random.randint(1, 3)))
         self.screen.blit(self.noise_surf, (0, 0))
 
     def effect_tunnel(self):
@@ -384,7 +504,7 @@ class FullHydrogenSimulation:
         self._add_calm_flash_overlay(0.25)
 
     def effect_chaos(self):
-        """Max mayhem: shake + scroll glitches + color inversion + popups + intense flash."""
+        """Max mayhem: shake + glitches + inversion + popups + red alarm strobe."""
         sx = random.randint(-SHAKE_MAX, SHAKE_MAX)
         sy = random.randint(-SHAKE_MAX, SHAKE_MAX)
 
@@ -410,8 +530,46 @@ class FullHydrogenSimulation:
                 glitch.blit(mask, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
                 self.screen.blit(glitch, (rx + random.randint(-50, 50), ry + random.randint(-10, 10)))
 
+        # Rare full-screen color inversion — very jarring
+        if random.random() > 0.97:
+            self.invert_surf.fill((255, 255, 255))
+            self.invert_surf.blit(self.screen, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
+            self.screen.blit(self.invert_surf, (0, 0))
+
         self._update_and_draw_popups()
-        self._draw_intense_flash_overlay()
+        self._draw_chaos_alarm()
+
+    def effect_bsod(self):
+        """Windows 10/11-style Blue Screen of Death."""
+        self.screen.fill((0, 120, 215))
+
+        self.screen.blit(self.font_bsod_face.render(":(", True, (255, 255, 255)), (80, 65))
+
+        y = 195
+        for line in [
+            "Your PC ran into a problem and needs to restart. We're just",
+            "collecting some error info, and then we'll restart for you.",
+        ]:
+            self.screen.blit(self.font_bsod_main.render(line, True, (255, 255, 255)), (80, y))
+            y += 38
+
+        progress = min(100, int((self.elapsed_in_phase / PHASE_DURATION) * 100))
+        self.screen.blit(
+            self.font_bsod_main.render(f"{progress}% complete", True, (255, 255, 255)),
+            (80, y + 20)
+        )
+
+        y_tech = self.height - 180
+        for line in [
+            "For more information about this issue and possible fixes, visit",
+            "https://www.windows.com/stopcode",
+            "",
+            "Stop code:   HYDROGEN_PAYLOAD_EXCEPTION",
+            "",
+            "What failed: hydrogen.sys",
+        ]:
+            self.screen.blit(self.font_bsod_small.render(line, True, (255, 255, 255)), (80, y_tech))
+            y_tech += 26
 
     def effect_calm_flash(self):
         """Gentle pulsing orbs — safe 2 Hz, no random size jitter."""
@@ -445,22 +603,13 @@ class FullHydrogenSimulation:
             self.flash_overlay_surf.fill((*sc[:3], alpha))
             self.screen.blit(self.flash_overlay_surf, (0, 0))
 
-    def _draw_intense_flash_overlay(self):
-        ff    = self.frame_count % 15
-        alpha = int(150 * ff / 7) if ff < 7 else int(150 * (15 - ff) / 8)
-        if alpha <= 0:
-            return
-        ci      = (self.frame_count // 5) % len(self.intense_colors)
-        r, g, b, _ = self.intense_colors[ci]
-        self.flash_overlay_surf.fill((0, 0, 0, 0))
-        for rect in [
-            (0,                          0,                           self.width // 3, self.height // 3),
-            (self.width - self.width//3, 0,                           self.width // 3, self.height // 3),
-            (self.width // 3,            self.height - self.height//3, self.width // 3, self.height // 3),
-            (self.width // 2 - 100,      self.height // 2 - 100,      200,             200),
-        ]:
-            pygame.draw.rect(self.flash_overlay_surf, (r, g, b, alpha), rect)
-        self.screen.blit(self.flash_overlay_surf, (0, 0))
+    def _draw_chaos_alarm(self):
+        """Hard red strobe — replaces the soft color flash during chaos."""
+        ff    = self.frame_count % 10
+        alpha = int(200 * ff / 4) if ff < 5 else int(200 * (10 - ff) / 5)
+        if alpha > 0:
+            self.flash_overlay_surf.fill((200, 0, 0, alpha))
+            self.screen.blit(self.flash_overlay_surf, (0, 0))
 
     # ── Popup helpers ──────────────────────────────────────────────────────────
     def _update_and_draw_popups(self):
@@ -472,49 +621,29 @@ class FullHydrogenSimulation:
             self.popup_cd = random.randint(40, 100)
         else:
             self.popup_cd -= 1
-
         self.active_popups = [p for p in self.active_popups if self.frame_count - p[3] < 300]
-
         for idx, px, py, _ in self.active_popups:
             self._draw_popup(POPUPS[idx % len(POPUPS)], px, py)
 
     def _draw_popup(self, popup, x, y):
         title, body, btn_label = popup
         w, h = 380, 190
-
-        # Window body + beveled border
         pygame.draw.rect(self.screen, (192, 192, 192), (x, y, w, h))
         pygame.draw.rect(self.screen, (255, 255, 255), (x,     y,     w, h), 1)
         pygame.draw.rect(self.screen, (128, 128, 128), (x + 1, y + h - 1, w - 1, 1))
         pygame.draw.rect(self.screen, (128, 128, 128), (x + w - 1, y + 1, 1, h - 1))
-
-        # Title bar
         pygame.draw.rect(self.screen, (0, 0, 128), (x, y, w, 22))
-        self.screen.blit(
-            self.font_popup_title.render(title, True, (255, 255, 255)), (x + 6, y + 4)
-        )
-
-        # Close button (Win95 style)
+        self.screen.blit(self.font_popup_title.render(title, True, (255, 255, 255)), (x + 6, y + 4))
         bx, by = x + w - 18, y + 3
         pygame.draw.rect(self.screen, (192, 192, 192), (bx, by, 16, 16))
         pygame.draw.rect(self.screen, (255, 255, 255), (bx, by, 16, 16), 1)
         pygame.draw.rect(self.screen, (128, 128, 128), (bx + 1, by + 15, 15, 1))
         pygame.draw.rect(self.screen, (128, 128, 128), (bx + 15, by + 1, 1, 15))
         self.screen.blit(self.font_popup_title.render("X", True, (0, 0, 0)), (bx + 3, by + 1))
-
-        # Error icon
         pygame.draw.circle(self.screen, (255, 0, 0), (x + 32, y + 75), 16)
-        self.screen.blit(
-            self.font_popup_title.render("!", True, (255, 255, 255)), (x + 29, y + 65)
-        )
-
-        # Body text
+        self.screen.blit(self.font_popup_title.render("!", True, (255, 255, 255)), (x + 29, y + 65))
         for i, line in enumerate(body.split('\n')):
-            self.screen.blit(
-                self.font_popup.render(line, True, (0, 0, 0)), (x + 58, y + 42 + i * 18)
-            )
-
-        # Button
+            self.screen.blit(self.font_popup.render(line, True, (0, 0, 0)), (x + 58, y + 42 + i * 18))
         bw    = self.font_popup.size(btn_label)[0] + 16
         btn_x = x + (w - bw) // 2
         btn_y = y + h - 36
@@ -522,16 +651,72 @@ class FullHydrogenSimulation:
         pygame.draw.rect(self.screen, (255, 255, 255), (btn_x,     btn_y,      bw, 22), 1)
         pygame.draw.rect(self.screen, (128, 128, 128), (btn_x + 1, btn_y + 21, bw - 1, 1))
         pygame.draw.rect(self.screen, (128, 128, 128), (btn_x + bw - 1, btn_y + 1, 1, 21))
-        self.screen.blit(
-            self.font_popup.render(btn_label, True, (0, 0, 0)), (btn_x + 8, btn_y + 4)
+        self.screen.blit(self.font_popup.render(btn_label, True, (0, 0, 0)), (btn_x + 8, btn_y + 4))
+
+    # ── Scary message overlay ──────────────────────────────────────────────────
+    def _update_scary_message(self):
+        if self.scary_msg:
+            if self.frame_count - self.scary_msg_frame >= self.scary_msg_duration:
+                self.scary_msg    = None
+                self.scary_msg_cd = random.randint(70, 200)
+        elif self.scary_msg_cd > 0:
+            self.scary_msg_cd -= 1
+        else:
+            self.scary_msg       = random.choice(SCARY_MESSAGES)
+            self.scary_msg_frame = self.frame_count
+
+    def _draw_scary_message(self):
+        if not self.scary_msg:
+            return
+        frames_shown = self.frame_count - self.scary_msg_frame
+        # Instant on, fade out at the end
+        alpha = 255 if frames_shown < self.scary_msg_duration - 12 else max(
+            0, int(255 * (self.scary_msg_duration - frames_shown) / 12)
         )
+        text_surf = self.font_scary.render(self.scary_msg, True, (255, 255, 255))
+        tw, th    = text_surf.get_size()
+        tx        = (self.width  - tw) // 2
+        ty        = (self.height - th) // 2
+
+        # Dark red band
+        band = pygame.Surface((self.width, th + 36), pygame.SRCALPHA)
+        band.fill((120, 0, 0, min(210, alpha)))
+        self.screen.blit(band, (0, ty - 18))
+
+        # Red accent lines
+        pygame.draw.line(self.screen, (255, 0, 0), (0, ty - 19),       (self.width, ty - 19),       2)
+        pygame.draw.line(self.screen, (255, 0, 0), (0, ty + th + 17),  (self.width, ty + th + 17),  2)
+
+        text_surf.set_alpha(alpha)
+        self.screen.blit(text_surf, (tx, ty))
+
+    # ── HUD overlays ──────────────────────────────────────────────────────────
+    def _draw_rec_indicator(self):
+        """Blinking ● REC — implies the screen is being recorded."""
+        if (self.frame_count // 20) % 2 == 0:
+            pygame.draw.circle(self.screen, (220, 0, 0),   (18, 18), 7)
+            pygame.draw.circle(self.screen, (255, 80, 80), (18, 18), 4)
+        self.screen.blit(self.font_hud.render("REC", True, (220, 0, 0)), (30, 10))
+
+    def _draw_countdown(self, elapsed_ms):
+        """Fake 'SECURE ERASE IN' timer counting down from 5 minutes."""
+        remaining = max(0, self.countdown_ms - elapsed_ms)
+        mins      = remaining // 60000
+        secs      = (remaining % 60000) // 1000
+        text      = f"SECURE ERASE IN  {mins:02d}:{secs:02d}"
+        blink     = remaining < 60000 and (self.frame_count // 15) % 2 == 0
+        color     = (255, 50, 50) if blink else (200, 60, 60)
+        surf      = self.font_hud.render(text, True, color)
+        x         = self.width - surf.get_width() - 18
+        self.screen.blit(self.font_hud.render(text, True, (0, 0, 0)), (x + 1, 12))
+        self.screen.blit(surf, (x, 11))
 
     # ── Main loop ──────────────────────────────────────────────────────────────
     def run(self):
         while self.running:
             current_ticks    = pygame.time.get_ticks()
             self.frame_count += 1
-            self.flash_cycle  = (self.flash_cycle + 1) % 30  # single increment per frame
+            self.flash_cycle  = (self.flash_cycle + 1) % 30
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -554,21 +739,35 @@ class FullHydrogenSimulation:
                 self.draw_desktop_icon()
 
             elif self.state == "payload":
-                elapsed = current_ticks - self.start_ticks
-                phase   = self.get_current_phase(elapsed)
+                elapsed               = current_ticks - self.start_ticks
+                phase_num             = elapsed // PHASE_DURATION
+                self.elapsed_in_phase = elapsed - phase_num * PHASE_DURATION
+                phase                 = self.get_current_phase(elapsed)
 
                 if   phase == "scroll":     self.effect_scroll()
                 elif phase == "melt":       self.effect_melt()
+                elif phase == "matrix":     self.effect_matrix()
                 elif phase == "chromatic":  self.effect_chromatic()
                 elif phase == "wave":       self.effect_wave()
                 elif phase == "terminal":   self.effect_terminal()
                 elif phase == "static":     self.effect_static()
                 elif phase == "tunnel":     self.effect_tunnel()
                 elif phase == "chaos":      self.effect_chaos()
+                elif phase == "bsod":       self.effect_bsod()
                 elif phase == "calm_flash": self.effect_calm_flash()
 
+                # Scary message flashes during tense phases
+                if phase in self.scary_msg_phases:
+                    self._update_scary_message()
+                    self._draw_scary_message()
+
+                # HUD — hidden during BSOD (it has its own full-screen design)
+                if phase != "bsod":
+                    self._draw_rec_indicator()
+                    self._draw_countdown(elapsed)
+
                 if (self.frame_count % SURFACE_UPDATE_INTERVAL == 0
-                        and phase not in {"tunnel", "calm_flash", "terminal", "chromatic"}):
+                        and phase not in {"tunnel", "calm_flash", "terminal", "chromatic", "matrix", "bsod"}):
                     self.work_surface.blit(self.screen, (0, 0))
 
             pygame.display.flip()
