@@ -195,17 +195,8 @@ class FullHydrogenSimulation:
         self.flash_overlay_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.noise_surf         = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.invert_surf        = pygame.Surface((self.width, self.height))
-        self.tunnel_angle       = 0.0
-        self.tunnel_rings       = []   # populated at tunnel phase start
-
-        # Pre-computed tunnel vignette — dark at edges, transparent at centre
-        self.tunnel_vignette = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        _cx, _cy = self.width // 2, self.height // 2
-        _max_r   = int(math.sqrt(_cx ** 2 + _cy ** 2))
-        for _i in range(50, 0, -1):
-            _r     = int(_max_r * _i / 50)
-            _alpha = int(180 * (_i / 50) ** 2)
-            pygame.draw.circle(self.tunnel_vignette, (0, 0, 0, _alpha), (_cx, _cy), _r)
+        self.tunnel_temp        = pygame.Surface((self.width, self.height))
+        self.tunnel_frame       = pygame.Surface((self.width, self.height))
         self.prev_phase         = None
 
         # Pre-computed RGB channels for chromatic aberration
@@ -498,13 +489,21 @@ class FullHydrogenSimulation:
         self.screen.blit(self.noise_surf, (0, 0))
 
     def effect_tunnel(self):
-        self.tunnel_angle += 1.5
-        self.screen.blit(self.bg_surface, (0, 0))
-        for i, ring in enumerate(self.tunnel_rings):
-            rotated      = pygame.transform.rotate(ring, self.tunnel_angle + (i + 1) * 10.0)
-            rw, rh       = rotated.get_size()
-            self.screen.blit(rotated, ((self.width - rw) // 2, (self.height - rh) // 2))
-        self.screen.blit(self.tunnel_vignette, (0, 0))
+        sf     = 0.98
+        new_w  = int(self.width  * sf)
+        new_h  = int(self.height * sf)
+        # Use tunnel_frame instead of self.screen — reading the display surface
+        # directly is unreliable on macOS due to double-buffer swapping.
+        shrunk = pygame.transform.smoothscale(self.tunnel_frame, (new_w, new_h))
+        if self.frame_count % 3 == 0:
+            shrunk = pygame.transform.rotate(shrunk, random.choice([-2, -1, 1, 2]))
+            new_w, new_h = shrunk.get_size()
+        xp = (self.width  - new_w) // 2
+        yp = (self.height - new_h) // 2
+        self.tunnel_temp.blit(self.bg_surface, (0, 0))
+        self.tunnel_temp.blit(shrunk, (xp, yp))
+        self.screen.blit(self.tunnel_temp, (0, 0))
+        self.tunnel_frame.blit(self.tunnel_temp, (0, 0))  # save for next frame
 
     def effect_chaos(self):
         """Max mayhem: shake + glitches + inversion + popups + red alarm strobe."""
@@ -725,17 +724,9 @@ class FullHydrogenSimulation:
                 self.elapsed_in_phase = elapsed - phase_num * PHASE_DURATION
                 phase                 = self.get_current_phase(elapsed)
 
-                # Pre-compute concentric rings once at tunnel phase start
+                # Seed tunnel_frame from work_surface on the first frame of the tunnel phase
                 if phase == "tunnel" and self.prev_phase != "tunnel":
-                    self.tunnel_angle = 0.0
-                    self.tunnel_rings = []
-                    for _i in range(1, 13):
-                        _sf  = 0.82 ** _i
-                        _sw  = int(self.width  * _sf)
-                        _sh  = int(self.height * _sf)
-                        if _sw >= 2 and _sh >= 2:
-                            _ring = pygame.transform.smoothscale(self.bg_surface, (_sw, _sh))
-                            self.tunnel_rings.append(_ring.convert_alpha())
+                    self.tunnel_frame.blit(self.work_surface, (0, 0))
                 self.prev_phase = phase
 
                 if   phase == "scroll":     self.effect_scroll()
