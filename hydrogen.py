@@ -173,7 +173,8 @@ class FullHydrogenSimulation:
         # ── Phases ─────────────────────────────────────────────────────────────
         self.phases = [
             "scroll", "melt", "matrix", "chromatic",
-            "wave", "terminal", "static", "tunnel", "chaos", "bsod",
+            "wave", "duplicate", "terminal", "static", "tunnel", "chaos", "bsod",
+            "recovery", "exit",
         ]
 
         # ── Flash cycle — incremented ONCE per frame in run() ──────────────────
@@ -428,6 +429,51 @@ class FullHydrogenSimulation:
             self.screen.blit(self.bg_surface, (dx, y), (0, y, self.width, row_height))
         self._add_calm_flash_overlay(0.4)
 
+    def effect_duplicate(self):
+        """Full screen backs up, then shifts left fast while duplicating copies with a persistent error message."""
+        self.screen.fill((0, 0, 0))
+        
+        # Smooth progression through the phase
+        phase_progress = self.elapsed_in_phase / PHASE_DURATION
+        
+        if phase_progress < 0.15:  # Backup stage (0-1050ms)
+            # Screen moves slightly to the right (backs up)
+            backup_progress = phase_progress / 0.15
+            backup_distance = int(40 * backup_progress)
+            self.screen.blit(self.bg_surface, (backup_distance, 0))
+            
+        elif phase_progress < 0.85:  # Fast shift-left stage (1050-5950ms)
+            # Calculate position with faster acceleration
+            shift_progress = (phase_progress - 0.15) / 0.70
+            shift_distance = int(self.width * shift_progress * 1.2)
+            
+            # Draw multiple copies of the screen moving left
+            num_copies = 5
+            for i in range(num_copies):
+                # Position each copy so they flow continuously
+                copy_x = (i * self.width) - shift_distance
+                
+                # Reduce opacity slightly for each successive copy
+                temp_surf = self.bg_surface.copy()
+                alpha = int(255 * (1 - i * 0.12))
+                temp_surf.set_alpha(max(40, alpha))
+                self.screen.blit(temp_surf, (copy_x, 0))
+        
+        else:  # Pause at end (5950-7000ms)
+            # Hold final position
+            shift_distance = int(self.width * 1.2)
+            for i in range(5):
+                copy_x = (i * self.width) - shift_distance
+                temp_surf = self.bg_surface.copy()
+                alpha = int(255 * (1 - i * 0.12))
+                temp_surf.set_alpha(max(40, alpha))
+                self.screen.blit(temp_surf, (copy_x, 0))
+        
+        # Draw persistent glitched error message that cannot be closed
+        self._draw_persistent_error_message()
+        
+        self._add_calm_flash_overlay(0.2)
+
     def effect_terminal(self):
         """Full-screen fake hacking terminal with scrolling commands."""
         self.screen.fill(COLORS['term_bg'])
@@ -573,6 +619,98 @@ class FullHydrogenSimulation:
             self.screen.blit(self.font_bsod_small.render(line, True, (255, 255, 255)), (80, y_tech))
             y_tech += 26
 
+    def effect_recovery(self):
+        """Black screen with loading message, then backs up."""
+        self.screen.fill((0, 0, 0))
+        
+        phase_progress = self.elapsed_in_phase / PHASE_DURATION
+        
+        if phase_progress < 0.7:  # 0-4900ms: Black screen with loading
+            # Flickering "Recovering your files..." text
+            if (self.frame_count // 10) % 2 == 0:
+                loading_text = self.font_bsod_main.render("Recovering your files...", True, (100, 150, 255))
+                loading_rect = loading_text.get_rect(center=(self.width // 2, self.height // 2))
+                self.screen.blit(loading_text, loading_rect)
+                
+                # Progress bar
+                bar_width = 400
+                bar_height = 20
+                bar_x = (self.width - bar_width) // 2
+                bar_y = loading_rect.bottom + 40
+                
+                # Outer border
+                pygame.draw.rect(self.screen, (100, 150, 255), (bar_x, bar_y, bar_width, bar_height), 2)
+                
+                # Progress fill
+                fill_width = int(bar_width * (phase_progress / 0.7))
+                pygame.draw.rect(self.screen, (100, 150, 255), (bar_x, bar_y, fill_width, bar_height))
+        
+        elif phase_progress < 0.9:  # 4900-6300ms: Back up effect
+            # Screen moves slightly to the right (backing up)
+            backup_progress = (phase_progress - 0.7) / 0.2
+            backup_distance = int(60 * backup_progress)
+            self.screen.blit(self.work_surface, (backup_distance, 0))
+        
+        else:  # 6300-7000ms: Hold
+            self.screen.blit(self.work_surface, (60, 0))
+
+    def effect_exit(self):
+        """Show system fixed notification and prepare to exit."""
+        self.screen.fill((240, 240, 240))
+        
+        # Draw a notification dialog
+        notif_width = 550
+        notif_height = 220
+        notif_x = (self.width - notif_width) // 2
+        notif_y = (self.height - notif_height) // 2
+        
+        # Green border for success
+        pygame.draw.rect(self.screen, (76, 175, 80), (notif_x, notif_y, notif_width, notif_height), 3)
+        pygame.draw.rect(self.screen, (240, 248, 255), (notif_x, notif_y, notif_width, notif_height))
+        
+        # Title bar - green
+        pygame.draw.rect(self.screen, (76, 175, 80), (notif_x, notif_y, notif_width, 40))
+        
+        # Title
+        title = self.font_bsod_main.render("System Fixed", True, (255, 255, 255))
+        title_rect = title.get_rect(center=(notif_x + notif_width // 2, notif_y + 20))
+        self.screen.blit(title, title_rect)
+        
+        # Message lines
+        messages = [
+            "Your computer has been restored to normal.",
+            "All threats have been removed.",
+            "Thank you for using Windows",
+            "",
+            "- Microsoft Corporation"
+        ]
+        
+        msg_y = notif_y + 65
+        for msg in messages:
+            if msg:
+                msg_surf = self.font_popup.render(msg, True, (0, 0, 0))
+                msg_rect = msg_surf.get_rect(center=(notif_x + notif_width // 2, msg_y))
+                self.screen.blit(msg_surf, msg_rect)
+            msg_y += 25
+        
+        # OK button
+        button_width = 80
+        button_height = 30
+        button_x = (self.width - button_width) // 2
+        button_y = notif_y + notif_height - 45
+        
+        pygame.draw.rect(self.screen, (76, 175, 80), (button_x, button_y, button_width, button_height))
+        pygame.draw.rect(self.screen, (56, 142, 60), (button_x, button_y, button_width, button_height), 2)
+        
+        ok_text = self.font_popup.render("OK", True, (255, 255, 255))
+        ok_rect = ok_text.get_rect(center=(button_x + button_width // 2, button_y + button_height // 2))
+        self.screen.blit(ok_text, ok_rect)
+        
+        # After all phases complete, exit
+        if self.elapsed_in_phase > PHASE_DURATION - 100:
+            pygame.quit()
+            sys.exit()
+
     # ── Overlay helpers ────────────────────────────────────────────────────────
     def _add_calm_flash_overlay(self, intensity=0.5):
         base  = int(100 * intensity)
@@ -590,6 +728,64 @@ class FullHydrogenSimulation:
         if alpha > 0:
             self.flash_overlay_surf.fill((200, 0, 0, alpha))
             self.screen.blit(self.flash_overlay_surf, (0, 0))
+
+    def _draw_persistent_error_message(self):
+        """Draw a glitched error message that persists and cannot be closed."""
+        # Create a corrupted-looking error dialog in the center
+        error_width = 500
+        error_height = 180
+        error_x = (self.width - error_width) // 2
+        error_y = (self.height - error_height) // 2
+        
+        # Draw main error box with red border
+        pygame.draw.rect(self.screen, (200, 50, 50), (error_x, error_y, error_width, error_height))
+        pygame.draw.rect(self.screen, (255, 100, 100), (error_x, error_y, error_width, error_height), 3)
+        
+        # Draw title bar
+        pygame.draw.rect(self.screen, (150, 30, 30), (error_x, error_y, error_width, 30))
+        
+        # Draw glitched title text with slight offset artifacts
+        title = "ERROR"
+        title_text = self.font_mono.render(title, True, (255, 255, 255))
+        
+        # Add glitch effect by drawing offset copies
+        glitch_offset_x = random.randint(-3, 3) if random.random() > 0.7 else 0
+        glitch_offset_y = random.randint(-2, 2) if random.random() > 0.7 else 0
+        
+        self.screen.blit(title_text, (error_x + 12 + glitch_offset_x, error_y + 6 + glitch_offset_y))
+        
+        # Draw glitched error message
+        error_lines = [
+            "A fatal exception has occurred",
+            "Cannot close this window",
+            "System integrity compromised"
+        ]
+        
+        line_y = error_y + 45
+        for line in error_lines:
+            # Add random corruption to each line
+            if random.random() > 0.85:
+                # Occasionally display corrupted text
+                corrupted_line = ''.join([c if random.random() > 0.3 else chr(random.randint(33, 126)) for c in line])
+            else:
+                corrupted_line = line
+            
+            line_surf = self.font_mono_sm.render(corrupted_line, True, (255, 200, 200))
+            self.screen.blit(line_surf, (error_x + 15, line_y))
+            line_y += 30
+        
+        # Draw static "OK" button that doesn't work
+        button_width = 60
+        button_height = 25
+        button_x = error_x + (error_width - button_width) // 2
+        button_y = error_y + error_height - 35
+        
+        pygame.draw.rect(self.screen, (100, 100, 100), (button_x, button_y, button_width, button_height))
+        pygame.draw.rect(self.screen, (150, 150, 150), (button_x, button_y, button_width, button_height), 2)
+        
+        button_text = self.font_mono_sm.render("OK", True, (255, 255, 255))
+        button_text_rect = button_text.get_rect(center=(button_x + button_width // 2, button_y + button_height // 2))
+        self.screen.blit(button_text, button_text_rect)
 
     # ── Popup helpers ──────────────────────────────────────────────────────────
     def _update_and_draw_popups(self):
@@ -734,11 +930,14 @@ class FullHydrogenSimulation:
                 elif phase == "matrix":     self.effect_matrix()
                 elif phase == "chromatic":  self.effect_chromatic()
                 elif phase == "wave":       self.effect_wave()
+                elif phase == "duplicate":  self.effect_duplicate()
                 elif phase == "terminal":   self.effect_terminal()
                 elif phase == "static":     self.effect_static()
                 elif phase == "tunnel":     self.effect_tunnel()
                 elif phase == "chaos":      self.effect_chaos()
                 elif phase == "bsod":       self.effect_bsod()
+                elif phase == "recovery":   self.effect_recovery()
+                elif phase == "exit":       self.effect_exit()
 
                 # Scary message flashes during tense phases
                 if phase in self.scary_msg_phases:
