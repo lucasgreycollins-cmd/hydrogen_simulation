@@ -119,9 +119,14 @@ class FullHydrogenSimulation:
         pygame.display.set_caption("Hydrogen Full Simulation")
 
         try:
-            self.bg_surface = pygame.image.fromstring(
+            bg_raw = pygame.image.fromstring(
                 self.screenshot.tobytes(), self.screenshot.size, self.screenshot.mode
             ).convert()
+            # Scale down to logical pixel dimensions (fixes Retina 2× capture on macOS)
+            if bg_raw.get_size() != (self.width, self.height):
+                self.bg_surface = pygame.transform.scale(bg_raw, (self.width, self.height))
+            else:
+                self.bg_surface = bg_raw
         except Exception as e:
             print(f"Failed to convert screenshot to surface: {e}")
             sys.exit(1)
